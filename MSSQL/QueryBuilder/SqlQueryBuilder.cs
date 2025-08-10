@@ -1,14 +1,12 @@
 ﻿using MSSQL.Attributes;
 using MSSQL.Cache;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text;
 using System.Text.RegularExpressions;
+using static MSSQL.QueryBuilder.SqlQueryCache;
 
 namespace MSSQL.QueryBuilder
 {
@@ -27,7 +25,7 @@ namespace MSSQL.QueryBuilder
         private readonly Type _ttype;
         private readonly T _instance;
 
-        private int _anonymousParamsCount;
+        private WhereClauseBuilder<T> _whereClauseBuilder;
 
         protected SqlQueryBuilder(bool createInstance = false, bool getType = false)
             : base()
@@ -41,7 +39,7 @@ namespace MSSQL.QueryBuilder
             if (getType)
                 _ttype = typeof(T);
 
-            _anonymousParamsCount = 0;
+            _whereClauseBuilder = new WhereClauseBuilder<T>(_parameters);
         }
 
         /*** Set table name
@@ -61,7 +59,7 @@ namespace MSSQL.QueryBuilder
 
             PropertyInfo[] tProperties = ReflectionCache.GetProperties<T>();
             List<string> paramKeys = new List<string>();
-            string where = ParseExpression(expression.Body, tProperties, paramKeys);
+            string where = _whereClauseBuilder.ParseExpression(expression.Body, tProperties, paramKeys);
 
             foreach (string paramKey in paramKeys)
             {
@@ -75,7 +73,6 @@ namespace MSSQL.QueryBuilder
                     if (paramVal is DBNull)
                     {
                         string columnName = matchedWhere.Replace($"= {paramKey}", "");
-
                         where = where.Replace(matchedWhere, $"{columnName} IS NULL");
                     }
                 }
@@ -86,105 +83,11 @@ namespace MSSQL.QueryBuilder
             return this;
         }
 
-        private string ParseExpression(Expression expression, PropertyInfo[] properties, List<string> paramKeys)
-        {
-            string paramKey = null;
-            switch (expression)
-            {
-                case BinaryExpression binaryExpression:
-                    return ParseBinaryExpression(binaryExpression, properties, paramKeys);
-                case MemberExpression memberExpression:
-                    PropertyInfo property = properties.FirstOrDefault(p => p.Name == memberExpression.Member.Name);
-                    if (property is null)
-                    {
-                        if (!(memberExpression.Member is FieldInfo fieldInfo))
-                            throw new Exception($"");
-
-                        ConstantExpression closureExpression = (ConstantExpression)memberExpression.Expression;
-
-                        object val = fieldInfo.GetValue(closureExpression.Value);
-                        paramKey = $"@{memberExpression.Member.Name}";
-                        _parameters.Add(new SqlParameter(paramKey, val ?? DBNull.Value));
-                        paramKeys.Add(paramKey);
-
-                        return paramKey;
-                    }
-
-                    SqlColumnAttribute columnAttribute = property.GetCustomAttribute<SqlColumnAttribute>();
-
-                    return columnAttribute is null ? $"[{memberExpression.Member.Name}]" : $"[{columnAttribute.ColumnName}]";
-                case ConstantExpression constantExpression:
-                    paramKey = $"@val{++_anonymousParamsCount}";
-                    _parameters.Add(new SqlParameter(paramKey, constantExpression.Value ?? DBNull.Value));
-                    paramKeys.Add(paramKey);
-
-                    return paramKey;
-                case MethodCallExpression methodCallExpression:
-                    if (methodCallExpression.Method.Name != "Contains" || !(methodCallExpression.Object is MemberExpression))
-                        throw new Exception($"Method {methodCallExpression.Method.Name} is not supported in this context");
-
-                    MemberExpression member = methodCallExpression.Object as MemberExpression;
-                    PropertyInfo property2 = properties.FirstOrDefault(p => p.Name == member.Member.Name);
-                    if (property2 is null)
-                        throw new Exception($"Property {member.Member.Name} not found in type {typeof(T).Name}");
-
-                    var valueExpr = methodCallExpression.Arguments[0];
-                    object val2 = null;
-                    if (valueExpr is ConstantExpression constExpr)
-                        val2 = $"%{constExpr.Value}%";
-                    else
-                        val2 = $"%{Expression.Lambda(valueExpr).Compile().DynamicInvoke()}%";
-
-                    paramKey = $"@contains{member.Member.Name}";
-                    _parameters.Add(new SqlParameter(paramKey, val2 ?? DBNull.Value));
-
-                    SqlColumnAttribute columnAttribute2 = property2.GetCustomAttribute<SqlColumnAttribute>();
-                    return columnAttribute2 is null ?
-                        $"[{member.Member.Name}] LIKE %@{member.Member.Name}%" : $"[{columnAttribute2.ColumnName}] LIKE @contains{member.Member.Name}";
-                default:
-                    throw new NotSupportedException($"Expression type {expression.GetType()} is not supported");
-            }
-        }
-
-        private string ParseBinaryExpression(BinaryExpression binaryExpression, PropertyInfo[] properties, List<string> paramKeys)
-        {
-            var left = ParseExpression(binaryExpression.Left, properties, paramKeys);
-            var right = ParseExpression(binaryExpression.Right, properties, paramKeys);
-            var operatorString = GetSqlOperator(binaryExpression.NodeType);
-
-            return $"{left} {operatorString} {right}";
-        }
-
-        private string GetSqlOperator(ExpressionType nodeType)
-        {
-            switch (nodeType)
-            {
-                case ExpressionType.Equal:
-                    return "=";
-                case ExpressionType.NotEqual:
-                    return "!=";
-                case ExpressionType.GreaterThan:
-                    return ">";
-                case ExpressionType.LessThan:
-                    return "<";
-                case ExpressionType.GreaterThanOrEqual:
-                    return ">=";
-                case ExpressionType.LessThanOrEqual:
-                    return "<=";
-                case ExpressionType.AndAlso:
-                    return "AND";
-                case ExpressionType.OrElse:
-                    return "OR";
-                default:
-                    throw new NotSupportedException($"Operator {nodeType} not supported");
-            }
-        }
-
         /*** 
          * 
          * @return SqlQueryBuilder
          */
-        public SqlQueryBuilder<T> OrderBy(Expression<Func<T, object>> orderBy, bool descending = false)
+        public SqlQueryBuilder<T> OrderBy(Expression<Func<T, object>> orderBy, bool descending = true)
         {
             if (orderBy == null)
                 throw new ArgumentNullException(nameof(orderBy));
@@ -192,264 +95,48 @@ namespace MSSQL.QueryBuilder
             if (_instance == null)
                 throw new NullReferenceException(nameof(_instance));
 
-            (Type, string) cacheKey = (_ttype ?? throw new NullReferenceException(nameof(_ttype)), orderBy.ToString());
-            string cacheValue = null;
-            if (SqlQueryCache.OrderByClauseCache.TryGetValue(cacheKey, out cacheValue))
+            if (_ttype == null)
+                throw new NullReferenceException(nameof(_ttype));
+
+            ClauseCacheKey cacheKey = new ClauseCacheKey { Type = _ttype, Expression = orderBy.ToString(), ClauseTypes = ClauseTypes.OrderBy };
+            if(TryGetClause(cacheKey, out ClauseCacheValue cacheValue))
             {
-                _orderClause.Add(cacheValue);
+                _orderClause.Add(cacheValue.Clause);
                 return this;
             }
 
-            object orderByObject = orderBy.Compile().Invoke(_instance);
-            IEnumerable<string> columnEnumrable = orderByObject.GetType().GetProperties().Select(p => p.Name);
-            if (!columnEnumrable.Any())
-                throw new ArgumentException("No columns selected for ordering");
-
-            if(columnEnumrable.Count() > 1)
-                throw new ArgumentException("OrderBy expression should select only one column");
-
-            string selectedColumn = columnEnumrable.SingleOrDefault();
-
-            string orderClause = (descending) ? $"[{selectedColumn}] DESC" : $"[{selectedColumn}] ASC";
-            _orderClause.Append(orderClause);
-            SqlQueryCache.OrderByClauseCache.AddOrUpdate(cacheKey, orderClause, (key, oldvalue) => orderClause);
+            string orderClause = ParseOrderByClause(orderBy, descending);
+            _orderClause.Add(orderClause);
+            AddClause(cacheKey, new ClauseCacheValue { Clause = orderClause });
 
             return this;
         }
-    }
 
-    public partial class SqlQueryBuilder<T>
-    {
-        private static void Selector(SqlQueryBuilder<T> builder, Expression<Func<T, object>> selector, out object selectorObject, out string[] selectorColumnList, out (Type, string) cacheKey)
+        private string ParseOrderByClause(Expression<Func<T, object>> orderBy, bool descending = false)
         {
-            selectorObject = null;
-            selectorColumnList = null;
-            cacheKey = (builder._ttype ?? throw new NullReferenceException(nameof(builder._ttype)), null);
+            MemberExpression memberExpr = null;
 
-            if (selector != null)
-            {
-                if (builder._instance == null)
-                    throw new NullReferenceException(nameof(builder._instance));
-
-                selectorObject = selector.Compile().Invoke(builder._instance);
-                cacheKey.Item2 = selector.ToString();
-                selectorColumnList = selectorObject.GetType().GetProperties().Select(p => p.Name).ToArray();
-            }
-        }
-
-        /*** Select statement builder
-         * 
-         * @param selector
-         * @return SqlQueryBuilder
-         */
-        public static SqlQueryBuilder<T> Select(Expression<Func<T, object>> selector = null)
-        {
-            SqlQueryBuilder<T> builder = new SqlQueryBuilder<T>(createInstance: true, getType: true);
-            Selector(builder, selector, out object selectorObject, out string[] selectorColumnList, out (Type, string) cacheKey);
-
-            string cacheValue = null;
-            if (SqlQueryCache.TryGetSelectStatement(cacheKey, out cacheValue))
-            {
-                builder.query.Append(cacheValue);
-
-                return builder;
-            }
-
-            builder.SetTableName();
-
-            if (selectorObject is null)
-            {
-                builder.query.Append($"SELECT * FROM [{builder._tableName}]");
-                SqlQueryCache.AddOrUpdateSelectStatement(cacheKey, builder.query.ToString());
-
-                return builder;
-            }
-
-            if (selectorColumnList.Length == 0)
-                throw new ArgumentException("No columns selected");
-
-            PropertyInfo[] tProperties = ReflectionCache.GetProperties<T>();
-            List<string> columnList = new List<string>();
-            foreach (string selectorColumn in selectorColumnList)
-            {
-                PropertyInfo tProperty = tProperties.FirstOrDefault(p => p.Name == selectorColumn);
-                if (tProperty is null)
-                    continue;
-
-                SqlColumnAttribute sqlColumnAttribute = tProperty.GetCustomAttribute<SqlColumnAttribute>();
-                if (sqlColumnAttribute is null)
-                    columnList.Add($"[{selectorColumn}]");
-                else
-                    columnList.Add($"[{sqlColumnAttribute.ColumnName}]");
-            }
-
-            builder.query.Append($"SELECT {string.Join(", ", columnList)} FROM [{builder._tableName}]");
-            SqlQueryCache.AddOrUpdateSelectStatement(cacheKey, builder.query.ToString());
-
-            return builder;
-        }
-
-        /*** Insert statement builder
-         * 
-         * @param record
-         * @return SqlQueryBuilder
-         */
-        public static SqlQueryBuilder<T> Insert(T record)
-        {
-            SqlQueryBuilder<T> builder = new SqlQueryBuilder<T>(getType: true);
-            PropertyInfo[] recordProperties = ReflectionCache.GetProperties<T>();
-
-            if (SqlQueryCache.InsertStatementCache.TryGetValue(builder._ttype ?? throw new NullReferenceException(nameof(builder._ttype)), out string cacheValue))
-            {
-                builder.query.Append(cacheValue);
-                return builder;
-            }
-
-            builder.SetTableName();
-
-            StringBuilder insertColumnBuilder = new StringBuilder();
-            StringBuilder setValueBuilder = new StringBuilder();
-
-            foreach (PropertyInfo property in recordProperties)
-            {
-                SqlColumnAttribute columnAttribute = property.GetCustomAttribute<SqlColumnAttribute>();
-                string columnName = null;
-
-                if (columnAttribute is null)
-                {
-                    columnName = property.Name;
-                    insertColumnBuilder.Append($"[{columnName}], ");
-                    setValueBuilder.Append($"@{columnName}, ");
-                    builder._parameters.Add(new SqlParameter($"@{columnName}", property.GetValue(record) ?? DBNull.Value));
-                }
-                else
-                {
-                    columnName = columnAttribute.ColumnName;
-                    if (columnAttribute.PrimaryKey && columnAttribute.AutoIncrement)
-                    {
-                        continue;
-                    }
-                    else
-                    {
-                        insertColumnBuilder.Append($"[{columnName}], ");
-                        setValueBuilder.Append($"@{columnName}, ");
-                        builder._parameters.Add(new SqlParameter($"@{columnName}", property.GetValue(record) ?? DBNull.Value));
-                    }
-                }
-            }
-
-            insertColumnBuilder.Length -= 2;
-            setValueBuilder.Length -= 2;
-            builder.query.Append($"INSERT INTO [{builder._tableName}] ({insertColumnBuilder}) VALUES ({setValueBuilder})");
-            SqlQueryCache.InsertStatementCache.AddOrUpdate(builder._ttype, builder.query.ToString(), (key, oldvalue) => builder.query.ToString());
-
-            return builder;
-        }
-
-        /*** Update statement builder
-         * 
-         * @param record
-         * @param selector
-         * @return SqlQueryBuilder
-         */
-        public static SqlQueryBuilder<T> Update(T record, Expression<Func<T, object>> selector = null)
-        {
-            SqlQueryBuilder<T> builder = new SqlQueryBuilder<T>(getType: true);
-            Type ttype = typeof(T);
-            //Selector(builder, selector, out object? selectorObject, out string[]? selectorColumnList, out (Type, string) cacheKey);
-
-            object selectorObject = null;
-            string[] selectorColumnList = null;
-            (Type, string) cacheKey = (ttype, null);
-            if (selector != null)
-            {
-                selectorObject = selector.Compile().Invoke(record);
-                cacheKey.Item2 = selector.ToString();
-                selectorColumnList = selectorObject.GetType().GetProperties().Select(p => p.Name).ToArray();
-            }
-
-            string cacheValue = null;
-            if (SqlQueryCache.UpdateStatementCache.TryGetValue(cacheKey, out cacheValue))
-            {
-                builder.query.Append(cacheValue);
-                return builder;
-            }
-
-            builder.SetTableName();
-
-            PropertyInfo[] recordProperties = null;
-            if (selectorObject is null)
-                recordProperties = ReflectionCache.GetProperties<T>();
+            if (orderBy.Body is MemberExpression)
+                memberExpr = orderBy.Body as MemberExpression;
             else
             {
-                if (selectorColumnList.Length == 0)
-                    throw new ArgumentException("No columns selected");
-
-                recordProperties = ReflectionCache.GetProperties<T>()
-                    .Where(x => selectorColumnList.Any(columnName => columnName == x.Name)).ToArray();
+                if (orderBy.Body is UnaryExpression unaryExpr)
+                    memberExpr = unaryExpr.Operand as MemberExpression;
             }
 
-            StringBuilder setValueBuilder = new StringBuilder();
+            if (memberExpr is null || !(memberExpr.Member is PropertyInfo))
+                throw new NotSupportedException("");
 
-            foreach (PropertyInfo property in recordProperties)
-            {
-                SqlColumnAttribute columnAttribute = property.GetCustomAttribute<SqlColumnAttribute>();
-                string columnName = null;
+            PropertyInfo property = memberExpr.Member as PropertyInfo;
+            SqlColumnAttribute sqlColumnAttribute = property.GetCustomAttribute<SqlColumnAttribute>();
 
-                if (columnAttribute is null)
-                {
-                    columnName = property.Name;
-                    setValueBuilder.Append($"[{columnName}] = @{columnName}, ");
-                    builder._parameters.Add(new SqlParameter($"@{columnName}", property.GetValue(record) ?? DBNull.Value));
-                }
-                else
-                {
-                    columnName = columnAttribute.ColumnName;
-                    if (columnAttribute.PrimaryKey)
-                    {
-                        continue;
-                    }
-                    else
-                    {
-                        setValueBuilder.Append($"[{columnName}] = @{columnName}, ");
-                        builder._parameters.Add(new SqlParameter($"@{columnName}", property.GetValue(record) ?? DBNull.Value));
-                    }
-                }
-            }
-            setValueBuilder.Length -= 2;
-            builder.query.Append($"UPDATE [{builder._tableName}] SET {setValueBuilder}");
-            SqlQueryCache.UpdateStatementCache.AddOrUpdate(cacheKey, builder.query.ToString(), (key, oldvalue) => builder.query.ToString());
+            string orderClause = null;
+            if (sqlColumnAttribute is null)
+                orderClause = (descending) ? $"[{property.Name}] DESC" : $"[{property.Name}] ASC";
+            else
+                orderClause = (descending) ? $"[{sqlColumnAttribute.ColumnName}] DESC" : $"[{sqlColumnAttribute.ColumnName}] ASC";
 
-            return builder;
+            return orderClause;
         }
-
-        /*** Delete statement builder
-         * 
-         * @return SqlQueryBuilder
-         */
-        public static SqlQueryBuilder<T> Delete()
-        {
-            SqlQueryBuilder<T> builder = new SqlQueryBuilder<T>(getType: true);
-
-            builder.SetTableName();
-            builder.query.Append($"DELETE FROM [{builder._tableName}]");
-
-            return builder;
-        }
-
-        /*** 
-         * 
-         * @return SqlQueryBuilder
-         */
-        public static SqlQueryBuilder<T> Count()
-        {
-            SqlQueryBuilder<T> builder = new SqlQueryBuilder<T>(getType: true);
-
-            builder.SetTableName();
-            builder.query.Append($"SELECT CAST(COUNT(*) AS BIGINT) FROM [{builder._tableName}]");
-
-            return builder;
-        }
-
     }
 }

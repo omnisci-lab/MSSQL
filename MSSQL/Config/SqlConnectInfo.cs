@@ -18,6 +18,17 @@ namespace MSSQL.Connection
             _connectionString = sqlConnectionStringBuilder.ConnectionString;
         }
 
+        public static void CreateConnectionString(string dataSource, string initialCatalog)
+        {
+            SqlConnectionStringBuilder sqlConnectionStringBuilder = new SqlConnectionStringBuilder();
+            sqlConnectionStringBuilder.DataSource = dataSource;
+            sqlConnectionStringBuilder.InitialCatalog = initialCatalog;
+            sqlConnectionStringBuilder.UserID = string.Empty;
+            sqlConnectionStringBuilder.Password = string.Empty;
+
+            _connectionString = sqlConnectionStringBuilder.ConnectionString;
+        }
+
         public static void ReadFromConfigFile(string connectionStringName)
         {
             _connectionString = ConfigurationManager.ConnectionStrings[connectionStringName].ConnectionString;

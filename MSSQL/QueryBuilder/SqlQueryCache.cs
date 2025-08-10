@@ -1,44 +1,69 @@
 ﻿using System;
-using System.Collections.Concurrent;
+using System.Collections.Specialized;
+using System.Runtime.Caching;
 
 namespace MSSQL.QueryBuilder
 {
-    internal static class SqlQueryCache
+    /*** SqlQueryCache class
+    * 
+    * This class is used to cache clauses
+    * Author: Phan Xuân Chánh { Chinese Charater: 潘春正, EnglishName1: Chanh Xuan Phan, EnglishName2: StevePhan }
+    *  - www.phanxuanchanh.com
+    *  
+    */
+    internal class SqlQueryCache
     {
-        private static readonly ConcurrentDictionary<(Type, string), string> _selectStatementCache
-            = new ConcurrentDictionary<(Type, string), string>();
-
-        public static readonly ConcurrentDictionary<(Type, string), string> UpdateStatementCache
-            = new ConcurrentDictionary<(Type, string), string>();
-
-        public static readonly ConcurrentDictionary<Type, string> InsertStatementCache
-            = new ConcurrentDictionary<Type, string>();
-
-        public static readonly ConcurrentDictionary<(Type, string), string> OrderByClauseCache
-            = new ConcurrentDictionary<(Type, string), string>();
-
-        private static readonly ConcurrentDictionary<(string, string, string), string> _sqlStatementCache
-            = new ConcurrentDictionary<(string, string, string), string>();
-
-
-        public static bool TryGetSelectStatement((Type, string) key, out string statement)
+        private static readonly MemoryCache _cache = new MemoryCache("SqlQueryCache", new NameValueCollection
         {
-            return _selectStatementCache.TryGetValue(key, out statement);
+            { "cacheMemoryLimitMegabytes", "0" },
+            { "physicalMemoryLimitPercentage", "0" },
+            { "pollingInterval", "00:02:00" },
+            { "cacheEntriesCountLimit", "2000" }
+        });
+
+
+        public static void AddClause<TKey, TValue>(TKey key, TValue value)
+        {
+            CacheItem cacheItem = new CacheItem(key.ToString(), value);
+            CacheItemPolicy policy = new CacheItemPolicy
+            {
+                AbsoluteExpiration = ObjectCache.InfiniteAbsoluteExpiration,
+                Priority = CacheItemPriority.Default
+            };
+
+            _cache.Add(cacheItem, policy);
         }
 
-        public static void AddOrUpdateSelectStatement((Type, string) key, string statement)
+        public static bool TryGetClause<TKey, TValue>(TKey key, out TValue value)
         {
-            _selectStatementCache.AddOrUpdate(key, statement, (k, oldvalue) => statement);
+            CacheItem cacheItem = _cache.GetCacheItem(key.ToString());
+            if (cacheItem == null)
+            {
+                value = default(TValue);
+                return false;
+            }
+
+            value = (TValue)cacheItem.Value;
+            return true;
         }
 
-        public static bool TryGetSqlStatement((string, string, string) key, out string statement)
+        internal enum ClauseTypes { Select, SelectCount, Insert, Update, Delete, OrderBy, Where }
+
+        internal class ClauseCacheKey
         {
-            return _sqlStatementCache.TryGetValue(key, out statement);
+            public Type Type { get; set; }
+            public string Expression { get; set; }
+            public ClauseTypes ClauseTypes { get; set; }
+
+            public override string ToString()
+            {
+                return $"[{ClauseTypes.ToString()}]{{ Type:{Type.ToString()};Selector:{Expression}}}";
+            }
         }
 
-        public static void AddOrUpdateSqlStatement((string, string, string) key, string statement)
+        internal class ClauseCacheValue
         {
-            _sqlStatementCache.AddOrUpdate(key, statement, (k, oldvalue) => statement);
+            public string Clause { get; set; }
         }
     }
 }
