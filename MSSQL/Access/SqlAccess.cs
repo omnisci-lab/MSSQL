@@ -58,7 +58,7 @@ namespace MSSQL.Access
             return _sqlExecHelper.ExecuteNonQuery(_queryBuilder);
         }
 
-        public int Update(T record, Expression<Func<T, object>> selector)
+        public int Update(T record, Expression<Func<T, object>> selector = null)
         {
             _queryBuilder = SqlQueryBuilder<T>.Update(record, selector);
 

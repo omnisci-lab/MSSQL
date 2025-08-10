@@ -36,7 +36,7 @@ namespace MSSQL.QueryBuilder
             string orderByClause = "";
             if (_orderClause.Count > 0)
             {
-                orderByClause = " ORDER BY " + string.Join(", ", _orderClause);
+                orderByClause = "ORDER BY " + string.Join(", ", _orderClause);
             }
 
             return $"{query.ToString()} {whereClause} {orderByClause}";
