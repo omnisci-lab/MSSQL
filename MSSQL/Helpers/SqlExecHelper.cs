@@ -13,6 +13,8 @@ namespace MSSQL
         private SqlTransaction _transaction;
         private bool disposedValue;
 
+        public SqlConnection Connection => _connection;
+
         public SqlExecHelper(string connectionString)
         {
             _connectionString = connectionString;

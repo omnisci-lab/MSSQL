@@ -44,7 +44,6 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Access\SqlContextAsync.cs" />
     <Compile Include="Access\SqlAccess.cs" />
     <Compile Include="Access\SqlAccessAsync.cs" />
     <Compile Include="Access\SqlContext.cs" />

@@ -1,6 +1,7 @@
 ﻿using MSSQL.Connection;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 
 namespace MSSQL.Access
 {
@@ -36,25 +37,14 @@ namespace MSSQL.Access
             return sqlAccess;
         }
 
-        public SqlExecHelper GetHelper()
-        {
-            return _sqlExecHelper;
-        }
+        public SqlConnection GetConnection() => _sqlExecHelper.Connection;
+        public SqlExecHelper GetHelper() => _sqlExecHelper;
 
-        public void BeginTransaction()
-        {
-             _sqlExecHelper.BeginTransaction();
-        }
+        public void BeginTransaction() => _sqlExecHelper.BeginTransaction();
 
-        public void CommitTransaction()
-        {
-            _sqlExecHelper.CommitTransaction();
-        }
+        public void CommitTransaction() => _sqlExecHelper.CommitTransaction();
 
-        public void RollbackTransaction()
-        {
-            _sqlExecHelper.RollbackTransaction();
-        }
+        public void RollbackTransaction() => _sqlExecHelper.RollbackTransaction();
 
         protected virtual void Dispose(bool disposing)
         {

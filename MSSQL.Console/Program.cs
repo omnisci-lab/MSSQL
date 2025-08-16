@@ -1,15 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using MSSQL.Access;
+using MSSQL.Connection;
 
 namespace MSSQL.Console
 {
+    internal class DbContext : SqlContext { }
+
     internal class Program
     {
         static void Main(string[] args)
         {
+
         }
     }
 }

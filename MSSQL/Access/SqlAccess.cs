@@ -104,6 +104,9 @@ namespace MSSQL.Access
             foreach (Expression<Func<T, bool>> where in _where)
                 _queryBuilder.Where(where);
 
+            foreach (Expression<Func<T, object>> orderBy in _orderBy)
+                _queryBuilder.OrderBy(orderBy);
+
             IEnumerable<T> enumrable = _sqlExecHelper.ExecuteReader<T>(_queryBuilder, reader => SqlMapper.MapRow<T>(reader));
             return enumrable.ToList();
         }
@@ -120,6 +123,9 @@ namespace MSSQL.Access
 
             if (expression != null)
                 _queryBuilder.Where(expression);
+
+            foreach (Expression<Func<T, object>> orderBy in _orderBy)
+                _queryBuilder.OrderBy(orderBy);
 
             IEnumerable<T> enumrable = _sqlExecHelper.ExecuteReader<T>(_queryBuilder, reader => SqlMapper.MapRow<T>(reader));
 
@@ -139,6 +145,9 @@ namespace MSSQL.Access
 
             if (expression != null)
                 _queryBuilder.Where(expression);
+
+            foreach (Expression<Func<T, object>> orderBy in _orderBy)
+                _queryBuilder.OrderBy(orderBy);
 
             IEnumerable<T> enumrable = _sqlExecHelper.ExecuteReader<T>(_queryBuilder, reader => SqlMapper.MapRow<T>(reader));
 
